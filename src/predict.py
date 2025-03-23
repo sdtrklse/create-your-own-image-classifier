@@ -1,9 +1,10 @@
 import json
 import argparse
-from typing import Tuple
-from utils import load_checkpoint, process_image
+from typing import List, Tuple
 
 import torch
+
+from utils import load_checkpoint, process_image
 
 
 def predict(
@@ -12,52 +13,56 @@ def predict(
     topk: int = 5,
     category_names: str = None,
     gpu: bool = False
-) -> Tuple[list, list]:
+) -> Tuple[List[float], List[str]]:
     """
     Predict the class (or classes) of an image using a trained deep learning model.
-
-    Parameters:
-    image_path (str): Path to the image file.
-    checkpoint (str): Path to the model checkpoint file.
-    topk (int): Number of top predictions to return. Default is 5.
-    category_names (str): Path to a JSON file mapping category labels to names. Default is None.
-    gpu (bool): If True, use GPU for inference. Default is False.
-
+    
+    Args:
+        image_path (str): Path to the image file.
+        checkpoint (str): Path to the model checkpoint file.
+        topk (int, optional): Number of top predictions to return. Default is 5.
+        category_names (str, optional): Path to a JSON file mapping category labels to names. Default is None.
+        gpu (bool, optional): Use GPU for inference. Default is False.
+    
     Returns:
-    Tuple[list, list]: A tuple containing a list of probabilities and a list of class labels or names.
+        Tuple[List[float], List[str]]: A tuple containing a list of probabilities and a list of class labels.
     """
+    # Set the device to GPU if available and requested
     device = torch.device("cuda" if gpu and torch.cuda.is_available() else "cpu")
     
     # Load the model from the checkpoint and set it to evaluation mode
     model = load_checkpoint(checkpoint)
     model.to(device)
     model.eval()
-    
-    # Process the image into the correct format and move to specified device
-    image = process_image(image_path)
-    image = image.unsqueeze(0).to(device)
-    
-    # Disable gradient calculation for inference
+
+    # Preprocess the image
+    image = process_image(image_path).to(device)
+
+    # Make predictions with the model
     with torch.no_grad():
         output = model(image)
-        # Get the top k probabilities and indices
-        probs, indices = torch.exp(output).topk(topk)
     
-    # Convert probabilities and indices to numpy arrays and squeeze to remove single-dimensional entries
-    probs = probs.cpu().numpy().squeeze()
-    indices = indices.cpu().numpy().squeeze()
+    # Compute the probabilities of each class
+    probs = torch.nn.functional.softmax(output[0], dim=0)
     
-    # Map indices to class labels
+    # Get the top k probabilities and their indices
+    top_probs, top_indices = torch.topk(probs, topk)
+
+    # Convert the probabilities and indices to numpy arrays
+    top_probs = top_probs.cpu().numpy()
+    top_indices = top_indices.cpu().numpy()
+    
+    # Convert the indices to class labels
     idx_to_class = {v: k for k, v in model.class_to_idx.items()}
-    classes = [idx_to_class[idx] for idx in indices]
-    
+    classes = [idx_to_class[idx] for idx in top_indices]
+
     # If category names are provided, map the class labels to names
     if category_names:
         with open(category_names, "r") as file:
             cat_to_name = json.load(file)
         classes = [cat_to_name.get(c, c) for c in classes]
     
-    return probs, classes
+    return top_probs.tolist(), classes
 
 
 if __name__ == "__main__":
